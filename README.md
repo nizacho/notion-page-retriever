@@ -113,4 +113,17 @@ MIT License
 
 このプロジェクトは以下のライブラリを使用しています：
 - [github.com/jomei/notionapi](https://github.com/jomei/notionapi)
-- [github.com/sashabaranov/go-openai](https://github.com/sashabaranov/go-openai) 
+- [github.com/openai/openai-go](https://github.com/openai/openai-go) (ベータ版)
+
+## 注意事項
+
+### OpenAI Go公式ライブラリについて
+このプロジェクトでは、OpenAIの公式Go言語ライブラリ（`openai-go`）を使用していますが、このライブラリは現在ベータ版であり、正式にリリースされていません。そのため、APIの仕様が変更される可能性があります。
+
+### AIプロンプトについて
+このプロジェクトでは、以下のデフォルト設定でAIによる要約を行っています：
+
+- **使用モデル**: GPT-4
+- **システムプロンプト**: "あなたは与えられたテキストを要約する専門家です。重要なポイントを箇条書きで3-5個程度にまとめてください。"
+
+これらの設定は`main.go`の`summarizeContent`関数内でハードコードされており、現時点ではコマンドライン引数などによる動的な変更はサポートしていません。必要に応じてソースコードを修正してください。 

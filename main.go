@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/jomei/notionapi"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
-var client *notionapi.Client
 var blockChildren = make(map[notionapi.BlockID][]notionapi.Block)
 
 // インデントを使ってブロックの階層を視覚的に表現するための補助関数
@@ -128,37 +130,72 @@ func printBlock(block notionapi.Block, depth int) {
 	}
 }
 
+func summarizeContent(content string) (string, error) {
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		return "", fmt.Errorf("OPENAI_API_KEY is not set")
+	}
+
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+	)
+	resp, err := client.Chat.Completions.New(
+		context.Background(),
+		openai.ChatCompletionNewParams{
+			Messages: []openai.ChatCompletionMessageParamUnion{
+				openai.SystemMessage("あなたは与えられたテキストを要約する専門家です。重要なポイントを箇条書きで3-5個程度にまとめてください。"),
+				openai.UserMessage(content),
+			},
+			Model: shared.ChatModelGPT4,
+		},
+	)
+
+	if err != nil {
+		return "", fmt.Errorf("summarization failed: %v", err)
+	}
+
+	return resp.Choices[0].Message.Content, nil
+}
+
 func main() {
-	// Get the Notion API token from environment variable
+	if len(os.Args) != 2 {
+		fmt.Println("Usage: go run main.go <page-id>")
+		os.Exit(1)
+	}
+
 	token := os.Getenv("NOTION_API_TOKEN")
 	if token == "" {
-		log.Fatal("NOTION_API_TOKEN environment variable is not set")
+		log.Fatal("NOTION_API_TOKEN is not set")
 	}
 
-	// Initialize the Notion client
-	client = notionapi.NewClient(notionapi.Token(token))
-
-	// Get the page ID from command line arguments
-	if len(os.Args) < 2 {
-		log.Fatal("Please provide a page ID as an argument")
-	}
 	pageID := formatPageID(os.Args[1])
+	client := notionapi.NewClient(notionapi.Token(token))
 
-	// Create context
-	ctx := context.Background()
-
-	// Fetch and print blocks
-	blocks, err := fetchChildBlocks(ctx, notionapi.BlockID(pageID))
+	// 表示用の出力
+	err := printBlocksRecursive(client, notionapi.BlockID(pageID), 0, nil)
 	if err != nil {
 		log.Fatalf("Error fetching blocks: %v", err)
 	}
 
-	// Print blocks with indentation
-	printBlocksRecursive(blocks, 0)
+	// 要約用のテキスト収集
+	var contentBuilder strings.Builder
+	err = collectContent(client, notionapi.BlockID(pageID), &contentBuilder)
+	if err != nil {
+		log.Fatalf("Error collecting content: %v", err)
+	}
+
+	content := contentBuilder.String()
+	fmt.Println("\n=== AI による要約 ===\n")
+	summary, err := summarizeContent(content)
+	if err != nil {
+		log.Printf("Error generating summary: %v", err)
+	} else {
+		fmt.Println(summary)
+	}
 }
 
 // fetchChildBlocks は指定されたブロックIDの子ブロックを再帰的に取得します
-func fetchChildBlocks(ctx context.Context, blockID notionapi.BlockID) ([]notionapi.Block, error) {
+func fetchChildBlocks(ctx context.Context, blockID notionapi.BlockID, client *notionapi.Client) ([]notionapi.Block, error) {
 	var blocks []notionapi.Block
 	var cursor notionapi.Cursor
 
@@ -186,7 +223,7 @@ func fetchChildBlocks(ctx context.Context, blockID notionapi.BlockID) ([]notiona
 	// 各ブロックの子ブロックを再帰的に取得
 	for _, block := range blocks {
 		if block.GetHasChildren() {
-			childBlocks, err := fetchChildBlocks(ctx, block.GetID())
+			childBlocks, err := fetchChildBlocks(ctx, block.GetID(), client)
 			if err != nil {
 				return nil, err
 			}
@@ -199,11 +236,61 @@ func fetchChildBlocks(ctx context.Context, blockID notionapi.BlockID) ([]notiona
 }
 
 // printBlocksRecursive prints blocks recursively with proper indentation
-func printBlocksRecursive(blocks []notionapi.Block, depth int) {
+func printBlocksRecursive(client *notionapi.Client, blockID notionapi.BlockID, depth int, contentBuilder *strings.Builder) error {
+	blocks, err := fetchChildBlocks(context.Background(), blockID, client)
+	if err != nil {
+		return err
+	}
+
 	for _, block := range blocks {
 		printBlock(block, depth)
-		if children, ok := blockChildren[block.GetID()]; ok {
-			printBlocksRecursive(children, depth+1)
+		if _, ok := blockChildren[block.GetID()]; ok {
+			err := printBlocksRecursive(client, block.GetID(), depth+1, contentBuilder)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	return nil
+}
+
+// collectContent collects text content from blocks for summarization
+func collectContent(client *notionapi.Client, blockID notionapi.BlockID, contentBuilder *strings.Builder) error {
+	blocks, err := fetchChildBlocks(context.Background(), blockID, client)
+	if err != nil {
+		return err
+	}
+
+	for _, block := range blocks {
+		switch b := block.(type) {
+		case *notionapi.ParagraphBlock:
+			contentBuilder.WriteString(getRichTextContent(b.Paragraph.RichText))
+		case *notionapi.Heading1Block:
+			contentBuilder.WriteString(getRichTextContent(b.Heading1.RichText))
+		case *notionapi.Heading2Block:
+			contentBuilder.WriteString(getRichTextContent(b.Heading2.RichText))
+		case *notionapi.Heading3Block:
+			contentBuilder.WriteString(getRichTextContent(b.Heading3.RichText))
+		case *notionapi.BulletedListItemBlock:
+			contentBuilder.WriteString(getRichTextContent(b.BulletedListItem.RichText))
+		case *notionapi.NumberedListItemBlock:
+			contentBuilder.WriteString(getRichTextContent(b.NumberedListItem.RichText))
+		case *notionapi.ToDoBlock:
+			contentBuilder.WriteString(getRichTextContent(b.ToDo.RichText))
+		case *notionapi.QuoteBlock:
+			contentBuilder.WriteString(getRichTextContent(b.Quote.RichText))
+		case *notionapi.CalloutBlock:
+			contentBuilder.WriteString(getRichTextContent(b.Callout.RichText))
+		case *notionapi.ToggleBlock:
+			contentBuilder.WriteString(getRichTextContent(b.Toggle.RichText))
+		}
+		contentBuilder.WriteString("\n\n")
+		if _, ok := blockChildren[block.GetID()]; ok {
+			err := collectContent(client, block.GetID(), contentBuilder)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
