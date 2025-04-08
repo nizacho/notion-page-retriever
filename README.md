@@ -1,4 +1,4 @@
-# Notion Page Structure Retriever
+# notion-page-retriever
 
 このアプリケーションは、NotionのページIDを指定して、そのページの階層構造を再帰的に取得し、Markdownフォーマットで出力するコマンドラインツールです。
 
@@ -35,8 +35,8 @@
 
 1. リポジトリをクローン：
 ```bash
-git clone [repository-url]
-cd [repository-name]
+git clone https://github.com/nizacho/notion-page-retriever.git
+cd notion-page-retriever
 ```
 
 2. 依存関係をインストール：
@@ -84,9 +84,6 @@ go run main.go <page-id>
 
 > 引用テキスト
 
-```python
-print("コードブロック")
-```
 ```
 
 ## セットアップのトラブルシューティング
